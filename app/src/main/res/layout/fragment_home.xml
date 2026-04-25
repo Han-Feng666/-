@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <ImageView
+        android:id="@+id/homeBackground"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:contentDescription="主界面背景图"
+        android:scaleType="centerCrop"
+        android:src="@drawable/bg_fallback_home" />
+
+    <androidx.constraintlayout.widget.ConstraintLayout
+        android:id="@+id/homeContent"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:padding="@dimen/page_horizontal_padding">
+
+        <LinearLayout
+            android:id="@+id/homeButtons"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_horizontal"
+            android:orientation="vertical"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_constraintVertical_bias="0.40">
+
+            <Button
+                android:id="@+id/btnToggle"
+                android:layout_width="220dp"
+                android:layout_height="@dimen/home_button_height"
+                android:layout_marginBottom="16dp"
+                android:background="@drawable/bg_panel"
+                android:backgroundTint="@null"
+                android:minWidth="180dp"
+                android:paddingHorizontal="32dp"
+                android:text="开启拦截"
+                android:textAllCaps="false"
+                android:textColor="@color/hf_text_primary"
+                android:textSize="18sp" />
+
+            <Button
+                android:id="@+id/btnGuide"
+                android:layout_width="220dp"
+                android:layout_height="@dimen/home_button_height"
+                android:layout_marginBottom="16dp"
+                android:background="@drawable/bg_panel"
+                android:backgroundTint="@null"
+                android:minWidth="180dp"
+                android:paddingHorizontal="32dp"
+                android:text="使用说明"
+                android:textAllCaps="false"
+                android:textColor="@color/hf_text_primary"
+                android:textSize="18sp" />
+
+            <Button
+                android:id="@+id/btnWhitelist"
+                android:layout_width="220dp"
+                android:layout_height="@dimen/home_button_height"
+                android:layout_marginBottom="16dp"
+                android:background="@drawable/bg_panel"
+                android:backgroundTint="@null"
+                android:minWidth="180dp"
+                android:paddingHorizontal="32dp"
+                android:text="黑白名单"
+                android:textAllCaps="false"
+                android:textColor="@color/hf_text_primary"
+                android:textSize="18sp" />
+        </LinearLayout>
+    </androidx.constraintlayout.widget.ConstraintLayout>
+</FrameLayout>
