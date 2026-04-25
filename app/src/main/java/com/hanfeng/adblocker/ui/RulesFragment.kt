@@ -31,11 +31,33 @@ import com.HanFeng.model.BlockRule
 import com.HanFeng.model.RuleListItem
 import com.HanFeng.model.RuleSource
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import java.net.HttpURLConnection
+import java.net.URL
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class RulesFragment : Fragment(R.layout.fragment_rules) {
+    companion object {
+        private const val currentRuleBranch = "260425-feat-improve-adguard-blocking"
+        private val githubRuleSources = listOf(
+            GitHubRuleSource(
+                name = "默认规则",
+                urls = listOf(
+                    "https://raw.githubusercontent.com/Han-Feng666/-/$currentRuleBranch/app/src/main/res/raw/default_safe_ad_rules.txt",
+                    "https://raw.githubusercontent.com/Han-Feng666/-/main/app/src/main/res/raw/default_safe_ad_rules.txt"
+                )
+            ),
+            GitHubRuleSource(
+                name = "保守规则",
+                urls = listOf(
+                    "https://raw.githubusercontent.com/Han-Feng666/-/$currentRuleBranch/domestic-safe-ad-sdk-rules.txt",
+                    "https://raw.githubusercontent.com/Han-Feng666/-/main/domestic-safe-ad-sdk-rules.txt"
+                )
+            )
+        )
+    }
+
     private var _binding: FragmentRulesBinding? = null
     private val binding get() = _binding!!
     private val expandedGroups = mutableSetOf<String>()
@@ -101,7 +123,7 @@ class RulesFragment : Fragment(R.layout.fragment_rules) {
         binding.btnPasteRule.setOnClickListener { pasteRuleInput() }
         binding.btnClearInput.setOnClickListener { clearRuleInput() }
         binding.btnImportRule.setOnClickListener { importLauncher.launch(arrayOf("text/*")) }
-        binding.btnDownloadRules.setOnClickListener { (requireActivity() as MainActivity).openRuleDownloadPage() }
+        binding.btnDownloadRules.setOnClickListener { downloadRulesFromGitHub() }
         binding.btnExportLogs.setOnClickListener { (activity as? MainActivity)?.shareLogs() }
         binding.btnSuspiciousDomains.setOnClickListener { openSuspiciousDomainsPage() }
         binding.btnFilter.setOnClickListener { filterNonAds() }
@@ -458,13 +480,79 @@ class RulesFragment : Fragment(R.layout.fragment_rules) {
         }
     }
 
+    private fun downloadRulesFromGitHub() {
+        val appContext = requireContext().applicationContext
+        binding.btnDownloadRules.isEnabled = false
+        Toast.makeText(requireContext(), "正在从 GitHub 同步规则...", Toast.LENGTH_SHORT).show()
+        viewLifecycleOwner.lifecycleScope.launch {
+            runCatching {
+                val downloaded = withContext(Dispatchers.IO) {
+                    githubRuleSources.map { source -> source to downloadTextFromCandidateUrls(source.urls) }
+                }
+                val mergedContent = buildString {
+                    downloaded.forEach { (source, content) ->
+                        append("! Source: ${source.name}\n")
+                        append(content.trim())
+                        append("\n\n")
+                    }
+                }.trim()
+                if (mergedContent.isBlank()) error("empty-rule-content")
+                importAndAnalyzeRuleContent(
+                    sourceLabel = downloaded.joinToString { it.first.name },
+                    sourceUri = Uri.parse("https://github.com/Han-Feng666/-/tree/main"),
+                    content = mergedContent
+                )
+            }.onFailure {
+                LogRepository.append(appContext, "Download GitHub rules failed: ${it.message ?: it.javaClass.simpleName}")
+                if (isAdded) {
+                    Toast.makeText(requireContext(), "从 GitHub 同步规则失败", Toast.LENGTH_SHORT).show()
+                }
+            }
+            if (_binding != null) {
+                binding.btnDownloadRules.isEnabled = true
+            }
+        }
+    }
+
     private suspend fun readRuleContent(context: android.content.Context, uri: Uri): String? {
         return withContext(Dispatchers.IO) {
             context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
         }
     }
 
+    private fun downloadTextFromCandidateUrls(urls: List<String>): String {
+        var lastError: Throwable? = null
+        urls.forEach { url ->
+            runCatching { return downloadTextFromUrl(url) }
+                .onFailure { lastError = it }
+        }
+        throw lastError ?: IllegalStateException("no-rule-url")
+    }
+
+    private fun downloadTextFromUrl(url: String): String {
+        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 10_000
+            readTimeout = 15_000
+            setRequestProperty("Accept", "text/plain")
+        }
+        return try {
+            val stream = if (connection.responseCode in 200..299) connection.inputStream else connection.errorStream
+            val body = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            if (connection.responseCode !in 200..299) {
+                error("http-${connection.responseCode}:${body.take(120)}")
+            }
+            body
+        } finally {
+            connection.disconnect()
+        }
+    }
+
     private suspend fun importAndAnalyzeRuleContent(uri: Uri, content: String) {
+        importAndAnalyzeRuleContent(sourceLabel = uri.toString(), sourceUri = uri, content = content)
+    }
+
+    private suspend fun importAndAnalyzeRuleContent(sourceLabel: String, sourceUri: Uri, content: String) {
         val appContext = context?.applicationContext ?: return
         val report = withContext(Dispatchers.Default) {
             RuleRepository.analyzeImportContent(appContext, content)
@@ -476,17 +564,27 @@ class RulesFragment : Fragment(R.layout.fragment_rules) {
             RuleRepository.getRuleInventory(appContext)
         }
         if (!isAdded || _binding == null) return
-        LogRepository.append(appContext, "Imported rules from $uri")
+        LogRepository.append(appContext, "Imported rules from $sourceLabel")
         refreshList()
         context?.let {
             Toast.makeText(it, "规则已导入，正在展示分析结果", Toast.LENGTH_SHORT).show()
         }
-        openImportAnalysisPage(inventory, report)
+        openImportAnalysisPage(inventory, report, sourceLabel, sourceUri)
     }
 
-    private fun openImportAnalysisPage(inventory: RuleRepository.RuleInventory, report: RuleRepository.RuleAnalysisReport) {
+    private fun openImportAnalysisPage(
+        inventory: RuleRepository.RuleInventory,
+        report: RuleRepository.RuleAnalysisReport,
+        sourceLabel: String,
+        sourceUri: Uri
+    ) {
         val host = activity as? MainActivity ?: return
         val content = buildString {
+            append("来源：")
+            append(sourceLabel)
+            append("\n地址：")
+            append(sourceUri)
+            append("\n\n")
             append("导入完成，当前可拦截 ")
             append(inventory.totalSupportedCount)
             append(" 条规则")
@@ -584,6 +682,11 @@ class RulesFragment : Fragment(R.layout.fragment_rules) {
     private data class RuleListState(
         val inventory: RuleRepository.RuleInventory,
         val items: List<RuleListItem>
+    )
+
+    private data class GitHubRuleSource(
+        val name: String,
+        val urls: List<String>
     )
 
     private class FilterRuleAdapter(
