@@ -5,9 +5,11 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.net.Uri
 import android.os.Bundle
+import android.view.KeyEvent
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.Toast
@@ -54,6 +56,13 @@ class RulesFragment : Fragment(R.layout.fragment_rules) {
                     "https://raw.githubusercontent.com/Han-Feng666/-/$currentRuleBranch/domestic-safe-ad-sdk-rules.txt",
                     "https://raw.githubusercontent.com/Han-Feng666/-/main/domestic-safe-ad-sdk-rules.txt"
                 )
+            ),
+            GitHubRuleSource(
+                name = "用户补充规则",
+                urls = listOf(
+                    "https://raw.githubusercontent.com/Han-Feng666/-/$currentRuleBranch/%E8%A7%84%E5%88%99.txt",
+                    "https://raw.githubusercontent.com/Han-Feng666/-/main/%E8%A7%84%E5%88%99.txt"
+                )
             )
         )
     }
@@ -80,7 +89,8 @@ class RulesFragment : Fragment(R.layout.fragment_rules) {
         RuleListAdapter(
             onGroupClick = { vendor -> toggleGroup(vendor) },
             onGroupLongPress = { vendor ->
-                val ids = RuleRepository.getRules(requireContext()).filter { it.vendor == vendor }.map { it.id }
+                val ctx = context ?: return@RuleListAdapter
+                val ids = RuleRepository.getRules(ctx).filter { it.vendor == vendor }.map { it.id }
                 enterSelection(ids)
             },
             onDomainClick = { item ->
@@ -120,11 +130,21 @@ class RulesFragment : Fragment(R.layout.fragment_rules) {
         binding.ruleList.setHasFixedSize(true)
         binding.ruleList.itemAnimator = null
         binding.btnAddRule.setOnClickListener { addManualRule() }
+        binding.inputRule.setOnEditorActionListener { _, actionId, event ->
+            val imeTriggered = actionId == EditorInfo.IME_ACTION_DONE
+            val enterTriggered = event?.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_DOWN
+            if (imeTriggered || enterTriggered) {
+                addManualRule()
+                true
+            } else {
+                false
+            }
+        }
         binding.btnPasteRule.setOnClickListener { pasteRuleInput() }
         binding.btnClearInput.setOnClickListener { clearRuleInput() }
-        binding.btnImportRule.setOnClickListener { importLauncher.launch(arrayOf("text/*")) }
-        binding.btnDownloadRules.setOnClickListener { downloadRulesFromGitHub() }
-        binding.btnExportLogs.setOnClickListener { (activity as? MainActivity)?.shareLogs() }
+        binding.btnRuleActions.setOnClickListener { showRuleActionPanel() }
+        binding.btnTrafficCard.setOnClickListener { (activity as? MainActivity)?.openTrafficCardPage() }
+        binding.btnJoinGroup.setOnClickListener { (activity as? MainActivity)?.joinQqGroup() }
         binding.btnSuspiciousDomains.setOnClickListener { openSuspiciousDomainsPage() }
         binding.btnFilter.setOnClickListener { filterNonAds() }
         binding.btnSelectAll.setOnClickListener { selectAllVisible() }
@@ -143,55 +163,99 @@ class RulesFragment : Fragment(R.layout.fragment_rules) {
         _binding = null
     }
 
+    private fun safeContext(): Context? {
+        return context?.takeIf { isAdded && it != null }
+    }
+
+    private fun safeDialogActivity(): MainActivity? {
+        val host = activity as? MainActivity ?: return null
+        if (!isAdded || host.isFinishing || host.isDestroyed) return null
+        return host
+    }
+
     private fun addManualRule() {
+        val ctx = safeContext() ?: return
         val rawInput = binding.inputRule.text?.toString().orEmpty()
         if (rawInput.isBlank()) {
-            Toast.makeText(requireContext(), "请先输入或粘贴域名/规则内容", Toast.LENGTH_SHORT).show()
+            Toast.makeText(ctx, "请先输入或粘贴域名/规则内容", Toast.LENGTH_SHORT).show()
             return
         }
-        val added = RuleRepository.addRules(requireContext(), rawInput, RuleSource.MANUAL)
+        val added = RuleRepository.addRules(ctx, rawInput, RuleSource.MANUAL)
         if (added.isEmpty()) {
-            Toast.makeText(requireContext(), "未识别到可添加的有效域名，或规则已存在", Toast.LENGTH_SHORT).show()
+            Toast.makeText(ctx, "未识别到可添加的有效域名，或规则已存在", Toast.LENGTH_SHORT).show()
             return
         }
         binding.inputRule.setText("")
-        LogRepository.append(requireContext(), "Added ${added.size} manual rules")
-        Toast.makeText(requireContext(), "已添加 ${added.size} 条规则", Toast.LENGTH_SHORT).show()
+        LogRepository.append(ctx, "Added ${added.size} manual rules")
+        Toast.makeText(ctx, "已添加 ${added.size} 条规则", Toast.LENGTH_SHORT).show()
         refreshList()
     }
 
     private fun pasteRuleInput() {
-        val clipboard = requireContext().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val ctx = safeContext() ?: return
+        val clipboard = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val text = clipboard.primaryClip?.let(::coerceClipText).orEmpty().trim()
         if (text.isBlank()) {
-            Toast.makeText(requireContext(), "剪贴板里没有可用内容", Toast.LENGTH_SHORT).show()
+            Toast.makeText(ctx, "剪贴板里没有可用内容", Toast.LENGTH_SHORT).show()
             return
         }
         val current = binding.inputRule.text?.toString().orEmpty().trim()
         val merged = if (current.isBlank()) text else "$current\n$text"
         binding.inputRule.setText(merged)
         binding.inputRule.setSelection(merged.length)
-        Toast.makeText(requireContext(), "已粘贴到输入框", Toast.LENGTH_SHORT).show()
+        Toast.makeText(ctx, "已粘贴到输入框", Toast.LENGTH_SHORT).show()
     }
 
     private fun clearRuleInput() {
+        val ctx = safeContext() ?: return
         if (binding.inputRule.text.isNullOrBlank()) {
-            Toast.makeText(requireContext(), "输入框已经是空的", Toast.LENGTH_SHORT).show()
+            Toast.makeText(ctx, "输入框已经是空的", Toast.LENGTH_SHORT).show()
             return
         }
         binding.inputRule.setText("")
-        Toast.makeText(requireContext(), "已清空输入内容", Toast.LENGTH_SHORT).show()
+        Toast.makeText(ctx, "已清空输入内容", Toast.LENGTH_SHORT).show()
     }
 
     private fun coerceClipText(clipData: ClipData): String? {
+        val ctx = context ?: return null
         return buildString {
             for (index in 0 until clipData.itemCount) {
-                val text = clipData.getItemAt(index).coerceToText(requireContext())?.toString().orEmpty().trim()
+                val text = clipData.getItemAt(index).coerceToText(ctx)?.toString().orEmpty().trim()
                 if (text.isBlank()) continue
                 if (isNotEmpty()) append('\n')
                 append(text)
             }
         }.ifBlank { null }
+    }
+
+    private fun showRuleActionPanel() {
+        if (!isAdded) return
+        val dialogContext = safeDialogActivity() ?: return
+        runCatching {
+            MaterialAlertDialogBuilder(dialogContext, R.style.ThemeOverlay_HanFeng_Dialog)
+                .setTitle("导入并同步")
+                .setItems(arrayOf("导入并分析本地规则", "同步 GitHub 规则")) { _, which ->
+                    when (which) {
+                        0 -> launchImportRulePicker()
+                        1 -> downloadRulesFromGitHub()
+                    }
+                }
+                .show()
+        }.onFailure {
+            LogRepository.append(dialogContext, "Open rule action panel failed: ${it.message ?: it.javaClass.simpleName}")
+            Toast.makeText(dialogContext, "打开导入菜单失败", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun launchImportRulePicker() {
+        if (!isAdded) return
+        runCatching {
+            importLauncher.launch(arrayOf("text/*"))
+        }.onFailure {
+            val ctx = safeContext() ?: return@onFailure
+            LogRepository.append(ctx, "Launch import picker failed: ${it.message ?: it.javaClass.simpleName}")
+            Toast.makeText(ctx, "无法打开文件选择器", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun toggleGroup(vendor: String) {
@@ -214,8 +278,17 @@ class RulesFragment : Fragment(R.layout.fragment_rules) {
                     grouped.forEach { (vendor, groupRules) ->
                         add(RuleListItem.Group(vendor, groupRules.size, expandedSnapshot.contains(vendor)))
                         if (expandedSnapshot.contains(vendor)) {
-                            groupRules.sortedBy { it.domain }.forEach { rule ->
-                                add(RuleListItem.Domain(rule, selectedSnapshot.contains(rule.id), currentSelectionMode))
+                            val sortedRules = groupRules.sortedBy { it.domain }
+                            val maxVisible = 500
+                            if (sortedRules.size > maxVisible) {
+                                sortedRules.take(maxVisible).forEach { rule ->
+                                    add(RuleListItem.Domain(rule, selectedSnapshot.contains(rule.id), currentSelectionMode))
+                                }
+                                add(RuleListItem.More(vendor, sortedRules.size - maxVisible))
+                            } else {
+                                sortedRules.forEach { rule ->
+                                    add(RuleListItem.Domain(rule, selectedSnapshot.contains(rule.id), currentSelectionMode))
+                                }
                             }
                         }
                     }
@@ -228,9 +301,6 @@ class RulesFragment : Fragment(R.layout.fragment_rules) {
                 append("  内置 ${state.inventory.referenceCount} 条")
                 append("  用户导入 ${state.inventory.importedCount} 条")
                 if (state.inventory.manualCount > 0) append("  手动 ${state.inventory.manualCount} 条")
-                if (state.inventory.unsupportedCount > 0) {
-                    append("  暂不支持样本 ${state.inventory.unsupportedCount} 条")
-                }
             }
             binding.selectionBar.isVisible = currentSelectionMode
             binding.selectionCount.text = if (filteredSelectionMode) {
@@ -307,7 +377,9 @@ class RulesFragment : Fragment(R.layout.fragment_rules) {
         }.onFailure {
             LogRepository.append(dialogContext, "Delete dialog failed: ${it.message ?: it.javaClass.simpleName}")
             enterSelection(snapshot)
-            Toast.makeText(dialogContext, "已进入多选删除模式", Toast.LENGTH_SHORT).show()
+            safeContext()?.let {
+                Toast.makeText(it, "已进入多选删除模式", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
@@ -329,7 +401,7 @@ class RulesFragment : Fragment(R.layout.fragment_rules) {
     private fun openSuspiciousDomainsPage() {
         val host = activity as? MainActivity ?: return
         if (RuleRepository.getSuspiciousDomainSamples(host).isEmpty()) {
-            Toast.makeText(host, "暂时没有可疑域名样本", Toast.LENGTH_SHORT).show()
+            Toast.makeText(host, "暂时没有可分析样本", Toast.LENGTH_SHORT).show()
             return
         }
         runCatching {
@@ -354,7 +426,7 @@ class RulesFragment : Fragment(R.layout.fragment_rules) {
         }
         runCatching {
             val dialog = MaterialAlertDialogBuilder(dialogContext, R.style.ThemeOverlay_HanFeng_Dialog)
-                .setTitle("筛选非广告规则")
+                .setTitle("清理低价值规则")
                 .setMessage("默认勾选的是准备删除的规则，包含非广告规则和暂不支持规则样本；取消勾选表示保留。")
                 .setView(listView)
                 .setPositiveButton("删除勾选", null)
@@ -390,7 +462,7 @@ class RulesFragment : Fragment(R.layout.fragment_rules) {
             dialog.show()
             styleDialogButtons(dialog)
         }.onFailure {
-            LogRepository.append(dialogContext, "Filter non-ads dialog failed: ${it.message ?: it.javaClass.simpleName}")
+            LogRepository.append(dialogContext, "Low-value rule cleanup dialog failed: ${it.message ?: it.javaClass.simpleName}")
             enterFilteredSelection(rules.map { it.id })
             Toast.makeText(dialogContext, "弹窗打开失败，已切换到多选删除模式", Toast.LENGTH_SHORT).show()
         }
@@ -398,32 +470,42 @@ class RulesFragment : Fragment(R.layout.fragment_rules) {
 
     private fun showRuleActions(rule: BlockRule) {
         val dialogContext = safeDialogActivity() ?: return
-        MaterialAlertDialogBuilder(dialogContext, R.style.ThemeOverlay_HanFeng_Dialog)
-            .setTitle(rule.domain)
-            .setItems(arrayOf("手动分类", "删除规则")) { _, which ->
-                when (which) {
-                    0 -> showVendorPicker(rule)
-                    1 -> confirmDelete(setOf(rule.id))
+        runCatching {
+            MaterialAlertDialogBuilder(dialogContext, R.style.ThemeOverlay_HanFeng_Dialog)
+                .setTitle(rule.domain)
+                .setItems(arrayOf("手动分类", "删除规则")) { _, which ->
+                    when (which) {
+                        0 -> showVendorPicker(rule)
+                        1 -> confirmDelete(setOf(rule.id))
+                    }
                 }
-            }
-            .show()
+                .show()
+        }.onFailure {
+            LogRepository.append(dialogContext, "Open rule action dialog failed: ${it.message ?: it.javaClass.simpleName}")
+            Toast.makeText(dialogContext, "打开规则操作失败", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun showVendorPicker(rule: BlockRule) {
         val dialogContext = safeDialogActivity() ?: return
         val options = RuleRepository.availableVendors(dialogContext)
-        MaterialAlertDialogBuilder(dialogContext, R.style.ThemeOverlay_HanFeng_Dialog)
-            .setTitle("选择厂商分组")
-            .setItems((options + "新建分组").toTypedArray()) { _, which ->
-                if (which == options.size) {
-                    showCreateVendorDialog(rule)
-                } else {
-                    val actionContext = context ?: return@setItems
-                    RuleRepository.updateRuleVendor(actionContext, rule.id, options[which])
-                    refreshList()
+        runCatching {
+            MaterialAlertDialogBuilder(dialogContext, R.style.ThemeOverlay_HanFeng_Dialog)
+                .setTitle("选择厂商分组")
+                .setItems((options + "新建分组").toTypedArray()) { _, which ->
+                    if (which == options.size) {
+                        showCreateVendorDialog(rule)
+                    } else {
+                        val actionContext = context ?: return@setItems
+                        RuleRepository.updateRuleVendor(actionContext, rule.id, options[which])
+                        refreshList()
+                    }
                 }
-            }
-            .show()
+                .show()
+        }.onFailure {
+            LogRepository.append(dialogContext, "Open vendor picker failed: ${it.message ?: it.javaClass.simpleName}")
+            Toast.makeText(dialogContext, "打开分组选择失败", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun showCreateVendorDialog(rule: BlockRule) {
@@ -455,17 +537,23 @@ class RulesFragment : Fragment(R.layout.fragment_rules) {
                 dialog.dismiss()
             }
         }
-        dialog.show()
-        styleDialogButtons(dialog)
+        runCatching {
+            dialog.show()
+            styleDialogButtons(dialog)
+        }.onFailure {
+            LogRepository.append(dialogContext, "Open create vendor dialog failed: ${it.message ?: it.javaClass.simpleName}")
+            Toast.makeText(dialogContext, "打开新建分组失败", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun importRuleFile(uri: Uri) {
-        val appContext = requireContext().applicationContext
+        val ctx = safeContext() ?: return
+        val appContext = ctx.applicationContext
         viewLifecycleOwner.lifecycleScope.launch {
             runCatching {
                 val content = readRuleContent(appContext, uri)
                 if (content == null) {
-                    context?.let {
+                    safeContext()?.let {
                         Toast.makeText(it, "读取规则文件失败", Toast.LENGTH_SHORT).show()
                     }
                     return@launch
@@ -474,16 +562,20 @@ class RulesFragment : Fragment(R.layout.fragment_rules) {
             }.onFailure {
                 LogRepository.append(appContext, "Import rule file failed: ${it.message ?: it.javaClass.simpleName}")
                 if (isAdded) {
-                    Toast.makeText(requireContext(), "导入规则失败", Toast.LENGTH_SHORT).show()
+                    safeContext()?.let {
+                        Toast.makeText(it, "导入规则失败", Toast.LENGTH_SHORT).show()
+                    }
                 }
             }
         }
     }
 
     private fun downloadRulesFromGitHub() {
-        val appContext = requireContext().applicationContext
-        binding.btnDownloadRules.isEnabled = false
-        Toast.makeText(requireContext(), "正在从 GitHub 同步规则...", Toast.LENGTH_SHORT).show()
+        val ctx = safeContext() ?: return
+        val appContext = ctx.applicationContext
+        val button = _binding?.btnRuleActions ?: return
+        button.isEnabled = false
+        Toast.makeText(ctx, "正在从 GitHub 同步规则...", Toast.LENGTH_SHORT).show()
         viewLifecycleOwner.lifecycleScope.launch {
             runCatching {
                 val downloaded = withContext(Dispatchers.IO) {
@@ -505,12 +597,12 @@ class RulesFragment : Fragment(R.layout.fragment_rules) {
             }.onFailure {
                 LogRepository.append(appContext, "Download GitHub rules failed: ${it.message ?: it.javaClass.simpleName}")
                 if (isAdded) {
-                    Toast.makeText(requireContext(), "从 GitHub 同步规则失败", Toast.LENGTH_SHORT).show()
+                    safeContext()?.let {
+                        Toast.makeText(it, "从 GitHub 同步规则失败", Toast.LENGTH_SHORT).show()
+                    }
                 }
             }
-            if (_binding != null) {
-                binding.btnDownloadRules.isEnabled = true
-            }
+            _binding?.btnRuleActions?.isEnabled = true
         }
     }
 
@@ -579,6 +671,7 @@ class RulesFragment : Fragment(R.layout.fragment_rules) {
         sourceUri: Uri
     ) {
         val host = activity as? MainActivity ?: return
+        if (!isAdded || host.isFinishing || host.isDestroyed) return
         val content = buildString {
             append("来源：")
             append(sourceLabel)
@@ -588,22 +681,15 @@ class RulesFragment : Fragment(R.layout.fragment_rules) {
             append("导入完成，当前可拦截 ")
             append(inventory.totalSupportedCount)
             append(" 条规则")
-            if (inventory.unsupportedCount > 0) {
-                append("，另保留 ")
-                append(inventory.unsupportedCount)
-                append(" 条暂不支持样本")
-            }
             append("\n\n")
             append(buildAnalysisSummary(report))
-            if (report.unsupportedModifierRules + report.cosmeticRules + report.regexRules > 0 || report.sampleUnsupportedLines.isNotEmpty()) {
-                append("\n\n已自动保留暂不支持规则样本，可在“筛选非广告规则”里批量清理。")
-            }
             if (report.sampleUnsupportedLines.isNotEmpty() || report.sampleInvalidLines.isNotEmpty()) {
                 append("\n\n")
                 append(buildAnalysisSamples(report))
             }
         }
         runCatching {
+            if (host.isFinishing || host.isDestroyed) error("activity-not-ready")
             host.startActivity(GuideActivity.createIntent(host, "导入结果分析", content))
         }.onFailure {
             LogRepository.append(host, "Open import analysis failed: ${it.message ?: it.javaClass.simpleName}")
@@ -614,7 +700,7 @@ class RulesFragment : Fragment(R.layout.fragment_rules) {
     private fun buildAnalysisSamples(report: RuleRepository.RuleAnalysisReport): String {
         return buildString {
             if (report.sampleUnsupportedLines.isNotEmpty()) {
-                append("已跳过的高级修饰符规则示例：\n")
+                append("当前仍未支持的规则示例：\n")
                 append(report.sampleUnsupportedLines.joinToString("\n"))
             }
             if (report.sampleInvalidLines.isNotEmpty()) {
@@ -636,7 +722,7 @@ class RulesFragment : Fragment(R.layout.fragment_rules) {
             append("已跳过或已合并统计：\n")
             append("- 重复现有规则：${report.duplicateExistingRules}\n")
             append("- 文件内重复：${report.duplicateWithinFileRules}\n")
-            append("- 高级修饰符：${report.unsupportedModifierRules}\n")
+            append("- 当前仍未支持修饰符：${report.unsupportedModifierRules}\n")
             append("- Cosmetic 规则：${report.cosmeticRules}\n")
             append("- 正则规则：${report.regexRules}\n")
             append("- 空行/注释：${report.blankOrCommentLines}\n")
@@ -649,18 +735,14 @@ class RulesFragment : Fragment(R.layout.fragment_rules) {
     }
 
     private fun visibleDomainIds(): List<String> {
-        val grouped = RuleRepository.getRules(requireContext()).groupBy { it.vendor }
+        val ctx = context ?: return emptyList()
+        val grouped = RuleRepository.getRules(ctx).groupBy { it.vendor }
         return grouped
             .filterKeys { expandedGroups.contains(it) }
             .values
-            .flatten()
-            .map { it.id }
-    }
-
-    private fun safeDialogActivity(): MainActivity? {
-        val host = activity as? MainActivity ?: return null
-        if (!isAdded || host.isFinishing || host.isDestroyed) return null
-        return host
+            .flatMap { rules ->
+                rules.map { it.id }.take(500)
+            }
     }
 
     private fun styleDialogButtons(dialog: AlertDialog) {
