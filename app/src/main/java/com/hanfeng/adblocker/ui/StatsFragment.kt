@@ -34,7 +34,6 @@ class StatsFragment : Fragment(R.layout.fragment_stats) {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         _binding = FragmentStatsBinding.bind(view)
-        val activity = requireActivity() as MainActivity
         view.findViewById<ImageView>(R.id.statsBackground).applyCustomAssetBackground("custom/stats_background")
         val initialTopPadding = binding.statsScroll.paddingTop
         val initialBottomPadding = binding.statsScroll.paddingBottom
@@ -48,10 +47,8 @@ class StatsFragment : Fragment(R.layout.fragment_stats) {
             )
             insets
         }
-        binding.btnTrafficCard.setOnClickListener { activity.openTrafficCardPage() }
-        binding.btnJoinGroup.setOnClickListener { activity.joinQqGroup() }
         StatsRepository.updates.observe(viewLifecycleOwner) {
-            requestRender()
+            requestRender(force = true)
         }
     }
 
@@ -86,8 +83,10 @@ class StatsFragment : Fragment(R.layout.fragment_stats) {
         binding.statGrid.removeAllViews()
         addStatCard("今日拦截", dashboard.todayBlocked.toString())
         addStatCard("累计拦截", dashboard.totalBlocked.toString())
+        addStatCard("DNS 总拦截", dashboard.dnsBlocked.toString())
+        addStatCard("MITM 总拦截", dashboard.httpBlocked.toString())
         addStatCard("请求拦截", dashboard.requestTotal.toString())
-        addStatCard("响应拦截", dashboard.responseTotal.toString())
+        addStatCard("累计节省流量", formatBytes(dashboard.bytesSaved))
 
         binding.leftColumn.removeAllViews()
         binding.rightColumn.removeAllViews()
@@ -97,6 +96,15 @@ class StatsFragment : Fragment(R.layout.fragment_stats) {
         addRankingCard(binding.rightColumn, "应用拦截排行", RankingType.APP_BLOCKED, rankings.appBlocked)
         addRankingCard(binding.rightColumn, "应用请求排行", RankingType.APP_REQUEST, rankings.appRequest)
         addRankingCard(binding.rightColumn, "应用响应排行", RankingType.APP_RESPONSE, rankings.appResponse)
+    }
+
+    private fun formatBytes(bytes: Long): String {
+        return when {
+            bytes < 1024 -> "${bytes} B"
+            bytes < 1024 * 1024 -> "${bytes / 1024} KB"
+            bytes < 1024 * 1024 * 1024 -> "${bytes / 1024 / 1024} MB"
+            else -> "${bytes / 1024 / 1024 / 1024} GB"
+        }
     }
 
     private fun addStatCard(title: String, value: String) {

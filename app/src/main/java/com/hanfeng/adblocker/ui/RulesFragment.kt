@@ -67,6 +67,7 @@ class RulesFragment : Fragment(R.layout.fragment_rules) {
         )
     }
 
+    private var mainActivity: MainActivity? = null
     private var _binding: FragmentRulesBinding? = null
     private val binding get() = _binding!!
     private val expandedGroups = mutableSetOf<String>()
@@ -111,6 +112,7 @@ class RulesFragment : Fragment(R.layout.fragment_rules) {
     }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        mainActivity = activity as? MainActivity
         _binding = FragmentRulesBinding.bind(view)
         view.findViewById<ImageView>(R.id.rulesBackground).applyCustomAssetBackground("custom/rules_background")
         val initialTopPadding = binding.rulesContent.paddingTop
@@ -143,14 +145,22 @@ class RulesFragment : Fragment(R.layout.fragment_rules) {
         binding.btnPasteRule.setOnClickListener { pasteRuleInput() }
         binding.btnClearInput.setOnClickListener { clearRuleInput() }
         binding.btnRuleActions.setOnClickListener { showRuleActionPanel() }
-        binding.btnTrafficCard.setOnClickListener { (activity as? MainActivity)?.openTrafficCardPage() }
-        binding.btnJoinGroup.setOnClickListener { (activity as? MainActivity)?.joinQqGroup() }
+        binding.btnTrafficCard.setOnClickListener { mainActivity?.openTrafficCardPage() }
+        binding.btnJoinGroup.setOnClickListener { mainActivity?.joinQqGroup() }
         binding.btnSuspiciousDomains.setOnClickListener { openSuspiciousDomainsPage() }
         binding.btnFilter.setOnClickListener { filterNonAds() }
         binding.btnSelectAll.setOnClickListener { selectAllVisible() }
         binding.btnDeleteSelected.setOnClickListener { confirmDelete(selectedIds) }
         binding.btnCancelSelection.setOnClickListener { exitSelection() }
-        refreshList()
+        refreshListDelayed()
+    }
+
+    private fun refreshListDelayed() {
+        view?.postDelayed({
+            if (isAdded && _binding != null && view != null) {
+                refreshList()
+            }
+        }, 200)
     }
 
     override fun onResume() {
@@ -231,30 +241,30 @@ class RulesFragment : Fragment(R.layout.fragment_rules) {
     private fun showRuleActionPanel() {
         if (!isAdded) return
         val dialogContext = safeDialogActivity() ?: return
-        runCatching {
+        try {
             MaterialAlertDialogBuilder(dialogContext, R.style.ThemeOverlay_HanFeng_Dialog)
-                .setTitle("导入并同步")
-                .setItems(arrayOf("导入并分析本地规则", "同步 GitHub 规则")) { _, which ->
+                .setTitle("选择操作")
+                .setItems(arrayOf("从文件导入规则", "同步 GitHub 规则")) { _, which ->
                     when (which) {
                         0 -> launchImportRulePicker()
                         1 -> downloadRulesFromGitHub()
                     }
                 }
                 .show()
-        }.onFailure {
-            LogRepository.append(dialogContext, "Open rule action panel failed: ${it.message ?: it.javaClass.simpleName}")
-            Toast.makeText(dialogContext, "打开导入菜单失败", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            LogRepository.append(dialogContext, "Open rule action panel failed: ${e.message ?: e.javaClass.simpleName}\nStack: ${e.stackTraceToString()}")
+            Toast.makeText(dialogContext, "打开操作菜单失败：${e.message}", Toast.LENGTH_LONG).show()
         }
     }
 
     private fun launchImportRulePicker() {
         if (!isAdded) return
-        runCatching {
+        try {
             importLauncher.launch(arrayOf("text/*"))
-        }.onFailure {
-            val ctx = safeContext() ?: return@onFailure
-            LogRepository.append(ctx, "Launch import picker failed: ${it.message ?: it.javaClass.simpleName}")
-            Toast.makeText(ctx, "无法打开文件选择器", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            val ctx = safeContext() ?: return
+            LogRepository.append(ctx, "Launch import picker failed: ${e.message ?: e.javaClass.simpleName}\nStack: ${e.stackTraceToString()}")
+            Toast.makeText(ctx, "无法打开文件选择器：${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -264,6 +274,7 @@ class RulesFragment : Fragment(R.layout.fragment_rules) {
     }
 
     private fun refreshList() {
+        if (!isAdded || _binding == null) return
         val appContext = context?.applicationContext ?: return
         val currentVersion = ++refreshVersion
         val expandedSnapshot = expandedGroups.toSet()
@@ -272,35 +283,41 @@ class RulesFragment : Fragment(R.layout.fragment_rules) {
         viewLifecycleOwner.lifecycleScope.launch {
             val state = withContext(Dispatchers.Default) {
                 val rules = RuleRepository.getRules(appContext)
-                val inventory = RuleRepository.getRuleInventory(appContext)
-                val grouped = rules.groupBy { it.vendor }.toSortedMap()
+                // 优化：规则已按 domain 排序，按顺序分组避免额外排序
+                val grouped = linkedMapOf<String, MutableList<BlockRule>>()
+                rules.forEach { rule ->
+                    grouped.getOrPut(rule.vendor) { mutableListOf() }.add(rule)
+                }
                 val items = buildList {
                     grouped.forEach { (vendor, groupRules) ->
                         add(RuleListItem.Group(vendor, groupRules.size, expandedSnapshot.contains(vendor)))
                         if (expandedSnapshot.contains(vendor)) {
-                            val sortedRules = groupRules.sortedBy { it.domain }
                             val maxVisible = 500
-                            if (sortedRules.size > maxVisible) {
-                                sortedRules.take(maxVisible).forEach { rule ->
+                            if (groupRules.size > maxVisible) {
+                                groupRules.take(maxVisible).forEach { rule ->
                                     add(RuleListItem.Domain(rule, selectedSnapshot.contains(rule.id), currentSelectionMode))
                                 }
-                                add(RuleListItem.More(vendor, sortedRules.size - maxVisible))
+                                add(RuleListItem.More(vendor, groupRules.size - maxVisible))
                             } else {
-                                sortedRules.forEach { rule ->
+                                groupRules.forEach { rule ->
                                     add(RuleListItem.Domain(rule, selectedSnapshot.contains(rule.id), currentSelectionMode))
                                 }
                             }
                         }
                     }
                 }
+                val inventory = RuleRepository.getRuleInventory(appContext)
                 RuleListState(inventory, items)
             }
             if (_binding == null || currentVersion != refreshVersion) return@launch
             binding.ruleSummary.text = buildString {
-                append("当前可拦截 ${state.inventory.totalSupportedCount} 条规则")
+                append("已保存 ${state.inventory.totalSavedCount} 条规则")
+                append("  当前可拦截 ${state.inventory.totalSupportedCount} 条")
                 append("  内置 ${state.inventory.referenceCount} 条")
                 append("  用户导入 ${state.inventory.importedCount} 条")
                 if (state.inventory.manualCount > 0) append("  手动 ${state.inventory.manualCount} 条")
+                if (state.inventory.regexCount > 0) append("  正则 ${state.inventory.regexCount} 条")
+                if (state.inventory.cosmeticCount > 0) append("  Cosmetic ${state.inventory.cosmeticCount} 条")
             }
             binding.selectionBar.isVisible = currentSelectionMode
             binding.selectionCount.text = if (filteredSelectionMode) {
@@ -360,74 +377,76 @@ class RulesFragment : Fragment(R.layout.fragment_rules) {
         val snapshot = ids.toSet()
         if (snapshot.isEmpty()) return
         val dialogContext = safeDialogActivity() ?: return
-        runCatching {
-            val dialog = MaterialAlertDialogBuilder(dialogContext, R.style.ThemeOverlay_HanFeng_Dialog)
+        try {
+            MaterialAlertDialogBuilder(dialogContext, R.style.ThemeOverlay_HanFeng_Dialog)
                 .setTitle("确认删除")
-                .setMessage("确定删除选中的规则吗？")
-                .setPositiveButton("确定") { _, _ ->
+                .setMessage("确定删除这 ${snapshot.size} 条规则吗？删除后无法恢复。")
+                .setPositiveButton("删除") { _, _ ->
                     val actionContext = context ?: return@setPositiveButton
                     RuleRepository.removeByIds(actionContext, snapshot)
                     LogRepository.append(actionContext, "Removed ${snapshot.size} rules")
+                    Toast.makeText(actionContext, "已删除 ${snapshot.size} 条规则", Toast.LENGTH_SHORT).show()
                     exitSelection()
+                    refreshList()
                 }
                 .setNegativeButton("取消", null)
-                .create()
-            dialog.show()
-            styleDialogButtons(dialog)
-        }.onFailure {
-            LogRepository.append(dialogContext, "Delete dialog failed: ${it.message ?: it.javaClass.simpleName}")
-            enterSelection(snapshot)
-            safeContext()?.let {
-                Toast.makeText(it, "已进入多选删除模式", Toast.LENGTH_SHORT).show()
-            }
+                .show()
+        } catch (e: Exception) {
+            LogRepository.append(dialogContext, "Delete dialog failed: ${e.message ?: e.javaClass.simpleName}\nStack: ${e.stackTraceToString()}")
+            Toast.makeText(dialogContext, "打开删除确认失败：${e.message}", Toast.LENGTH_LONG).show()
         }
     }
 
     private fun filterNonAds() {
         val dialogContext = safeDialogActivity() ?: return
-        viewLifecycleOwner.lifecycleScope.launch {
-            val rules = withContext(Dispatchers.Default) {
-                RuleRepository.filterNonAds(dialogContext)
+        try {
+            viewLifecycleOwner.lifecycleScope.launch {
+                val rules = withContext(Dispatchers.Default) {
+                    RuleRepository.filterNonAds(dialogContext)
+                }
+                if (!isAdded || _binding == null) return@launch
+                if (rules.isEmpty()) {
+                    Toast.makeText(dialogContext, "没有检测到可清理规则", Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+                showFilterNonAdsDialog(dialogContext, rules)
             }
-            if (!isAdded || _binding == null) return@launch
-            if (rules.isEmpty()) {
-                Toast.makeText(dialogContext, "没有检测到可清理规则", Toast.LENGTH_SHORT).show()
-                return@launch
-            }
-            showFilterNonAdsDialog(dialogContext, rules)
+        } catch (e: Exception) {
+            LogRepository.append(dialogContext, "Filter non-ads failed: ${e.message ?: e.javaClass.simpleName}\nStack: ${e.stackTraceToString()}")
+            Toast.makeText(dialogContext, "筛选失败：${e.message}", Toast.LENGTH_LONG).show()
         }
     }
 
     private fun openSuspiciousDomainsPage() {
         val host = activity as? MainActivity ?: return
-        if (RuleRepository.getSuspiciousDomainSamples(host).isEmpty()) {
-            Toast.makeText(host, "暂时没有可分析样本", Toast.LENGTH_SHORT).show()
-            return
-        }
-        runCatching {
+        try {
+            if (RuleRepository.getSuspiciousDomainSamples(host).isEmpty()) {
+                Toast.makeText(host, "当前没有需要分析的疑似广告域名", Toast.LENGTH_SHORT).show()
+                return
+            }
             suspiciousDomainsLauncher.launch(SuspiciousDomainsActivity.createIntent(host))
-        }.onFailure {
-            LogRepository.append(host, "Open suspicious domains page failed: ${it.message ?: it.javaClass.simpleName}")
-            Toast.makeText(host, "打开可疑域名失败", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            LogRepository.append(host, "Open suspicious domains page failed: ${e.message ?: e.javaClass.simpleName}\nStack: ${e.stackTraceToString()}")
+            Toast.makeText(host, "打开分析页面失败：${e.message}", Toast.LENGTH_LONG).show()
         }
     }
 
     private fun showFilterNonAdsDialog(dialogContext: MainActivity, rules: List<BlockRule>) {
-        val selected = rules.map { it.id }.toMutableSet()
-        val listView = RecyclerView(dialogContext).apply {
-            layoutManager = LinearLayoutManager(dialogContext)
-            setHasFixedSize(true)
-            itemAnimator = null
-            setPadding(0, 12, 0, 12)
-            clipToPadding = false
-            adapter = FilterRuleAdapter(rules, selected) { ruleId, checked ->
-                if (checked) selected += ruleId else selected -= ruleId
+        try {
+            val selected = rules.map { it.id }.toMutableSet()
+            val listView = RecyclerView(dialogContext).apply {
+                layoutManager = LinearLayoutManager(dialogContext)
+                setHasFixedSize(true)
+                itemAnimator = null
+                setPadding(0, 12, 0, 12)
+                clipToPadding = false
+                adapter = FilterRuleAdapter(rules, selected) { ruleId, checked ->
+                    if (checked) selected += ruleId else selected -= ruleId
+                }
             }
-        }
-        runCatching {
             val dialog = MaterialAlertDialogBuilder(dialogContext, R.style.ThemeOverlay_HanFeng_Dialog)
-                .setTitle("清理低价值规则")
-                .setMessage("默认勾选的是准备删除的规则，包含非广告规则和暂不支持规则样本；取消勾选表示保留。")
+                .setTitle("清理重复与无效规则")
+                .setMessage("勾选表示要删除的规则。系统已自动筛选出疑似非广告域名和暂不支持的规则。")
                 .setView(listView)
                 .setPositiveButton("删除勾选", null)
                 .setNeutralButton("全不选", null)
@@ -461,16 +480,17 @@ class RulesFragment : Fragment(R.layout.fragment_rules) {
             }
             dialog.show()
             styleDialogButtons(dialog)
-        }.onFailure {
-            LogRepository.append(dialogContext, "Low-value rule cleanup dialog failed: ${it.message ?: it.javaClass.simpleName}")
+        } catch (e: Exception) {
+            val ctx = safeContext() ?: return
+            LogRepository.append(ctx, "Low-value rule cleanup dialog failed: ${e.message ?: e.javaClass.simpleName}\nStack: ${e.stackTraceToString()}")
             enterFilteredSelection(rules.map { it.id })
-            Toast.makeText(dialogContext, "弹窗打开失败，已切换到多选删除模式", Toast.LENGTH_SHORT).show()
+            Toast.makeText(ctx, "弹窗打开失败，已切换到多选删除模式", Toast.LENGTH_SHORT).show()
         }
     }
 
     private fun showRuleActions(rule: BlockRule) {
         val dialogContext = safeDialogActivity() ?: return
-        runCatching {
+        try {
             MaterialAlertDialogBuilder(dialogContext, R.style.ThemeOverlay_HanFeng_Dialog)
                 .setTitle(rule.domain)
                 .setItems(arrayOf("手动分类", "删除规则")) { _, which ->
@@ -480,9 +500,9 @@ class RulesFragment : Fragment(R.layout.fragment_rules) {
                     }
                 }
                 .show()
-        }.onFailure {
-            LogRepository.append(dialogContext, "Open rule action dialog failed: ${it.message ?: it.javaClass.simpleName}")
-            Toast.makeText(dialogContext, "打开规则操作失败", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            LogRepository.append(dialogContext, "Open rule action dialog failed: ${e.message ?: e.javaClass.simpleName}\nStack: ${e.stackTraceToString()}")
+            Toast.makeText(dialogContext, "打开规则操作失败：${e.message}", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -577,7 +597,7 @@ class RulesFragment : Fragment(R.layout.fragment_rules) {
         button.isEnabled = false
         Toast.makeText(ctx, "正在从 GitHub 同步规则...", Toast.LENGTH_SHORT).show()
         viewLifecycleOwner.lifecycleScope.launch {
-            runCatching {
+            try {
                 val downloaded = withContext(Dispatchers.IO) {
                     githubRuleSources.map { source -> source to downloadTextFromCandidateUrls(source.urls) }
                 }
@@ -594,11 +614,11 @@ class RulesFragment : Fragment(R.layout.fragment_rules) {
                     sourceUri = Uri.parse("https://github.com/Han-Feng666/-/tree/main"),
                     content = mergedContent
                 )
-            }.onFailure {
-                LogRepository.append(appContext, "Download GitHub rules failed: ${it.message ?: it.javaClass.simpleName}")
+            } catch (e: Exception) {
+                LogRepository.append(appContext, "Download GitHub rules failed: ${e.message ?: e.javaClass.simpleName}\nStack: ${e.stackTraceToString()}")
                 if (isAdded) {
                     safeContext()?.let {
-                        Toast.makeText(it, "从 GitHub 同步规则失败", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(it, "从 GitHub 同步规则失败：${e.message}", Toast.LENGTH_LONG).show()
                     }
                 }
             }

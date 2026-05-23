@@ -20,18 +20,36 @@ class RuleListAdapter(
     private val onSelectionChanged: (RuleListItem.Domain, Boolean) -> Unit
 ) : ListAdapter<RuleListItem, RecyclerView.ViewHolder>(RuleItemDiffCallback()) {
 
+    companion object {
+        private const val TYPE_GROUP = 0
+        private const val TYPE_DOMAIN = 1
+        private const val TYPE_MORE = 2
+    }
+
     fun submit(items: List<RuleListItem>) {
         submitList(items)
     }
 
-    override fun getItemViewType(position: Int): Int = if (getItem(position) is RuleListItem.Group) 0 else 1
+    override fun getItemViewType(position: Int): Int {
+        return when (getItem(position)) {
+            is RuleListItem.Group -> TYPE_GROUP
+            is RuleListItem.Domain -> TYPE_DOMAIN
+            is RuleListItem.More -> TYPE_MORE
+        }
+    }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
         val inflater = LayoutInflater.from(parent.context)
-        return if (viewType == 0) {
-            GroupHolder(ItemRuleGroupBinding.inflate(inflater, parent, false))
-        } else {
-            DomainHolder(ItemRuleDomainBinding.inflate(inflater, parent, false))
+        return when (viewType) {
+            TYPE_GROUP -> GroupHolder(ItemRuleGroupBinding.inflate(inflater, parent, false))
+            TYPE_DOMAIN -> DomainHolder(ItemRuleDomainBinding.inflate(inflater, parent, false))
+            TYPE_MORE -> MoreHolder(com.google.android.material.textview.MaterialTextView(parent.context).apply {
+                setPadding(32, 8, 32, 8)
+                textSize = 13f
+                setTextColor(ContextCompat.getColor(parent.context, R.color.hf_text_secondary))
+                gravity = android.view.Gravity.CENTER
+            })
+            else -> throw IllegalArgumentException("unexpected view type: $viewType")
         }
     }
 
@@ -39,6 +57,7 @@ class RuleListAdapter(
         when (val item = getItem(position)) {
             is RuleListItem.Group -> (holder as GroupHolder).bind(item)
             is RuleListItem.Domain -> (holder as DomainHolder).bind(item)
+            is RuleListItem.More -> (holder as MoreHolder).bind(item)
         }
     }
 
@@ -80,11 +99,19 @@ class RuleListAdapter(
         }
     }
 
+    inner class MoreHolder(private val textView: android.widget.TextView) : RecyclerView.ViewHolder(textView) {
+        fun bind(item: RuleListItem.More) {
+            textView.text = "... 以及另外 ${item.remainingCount} 条规则 (点击展开)"
+            textView.setOnClickListener { onGroupClick(item.vendor) }
+        }
+    }
+
     private class RuleItemDiffCallback : DiffUtil.ItemCallback<RuleListItem>() {
         override fun areItemsTheSame(oldItem: RuleListItem, newItem: RuleListItem): Boolean {
             return when {
                 oldItem is RuleListItem.Group && newItem is RuleListItem.Group -> oldItem.vendor == newItem.vendor
                 oldItem is RuleListItem.Domain && newItem is RuleListItem.Domain -> oldItem.rule.id == newItem.rule.id
+                oldItem is RuleListItem.More && newItem is RuleListItem.More -> oldItem.vendor == newItem.vendor
                 else -> false
             }
         }

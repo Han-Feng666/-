@@ -4,6 +4,8 @@ import com.HanFeng.model.DnsQuestion
 import java.io.ByteArrayOutputStream
 
 object DnsMessageParser {
+    private const val TYPE_A = 1
+    private const val TYPE_AAAA = 28
     private const val TYPE_CNAME = 5
     private const val TYPE_SVCB = 64
     private const val TYPE_HTTPS = 65
@@ -26,8 +28,9 @@ object DnsMessageParser {
             offset += len + 1
         }
         if (offset + 4 > payload.size) return null
+        val id = readShort(payload, 0)
         val qType = readShort(payload, offset)
-        return DnsQuestion(labels.joinToString("."), qType)
+        return DnsQuestion(id, labels.joinToString("."), qType, System.currentTimeMillis())
     }
 
     fun buildSinkholeResponse(queryPayload: ByteArray, question: DnsQuestion): ByteArray? {
@@ -126,7 +129,7 @@ object DnsMessageParser {
             offset += dataLength
             minTtl = minTtl?.coerceAtMost(ttl) ?: ttl
         }
-        return ((minTtl ?: fallbackSeconds).coerceIn(5L, 120L)) * 1000L
+        return ((minTtl ?: fallbackSeconds).coerceIn(5L, 600L)) * 1000L
     }
 
     fun extractCnameTargets(response: ByteArray, question: DnsQuestion): List<String> {
@@ -195,6 +198,36 @@ object DnsMessageParser {
 
     fun negativeCacheTtlMillis(fallbackSeconds: Long = 15L): Long {
         return fallbackSeconds.coerceIn(5L, 30L) * 1000L
+    }
+
+    fun extractAnswerAddresses(response: ByteArray, question: DnsQuestion): List<ByteArray> {
+        if (response.size < 12) return emptyList()
+        val parsedQuestion = parseQuestion(response) ?: return emptyList()
+        if (!parsedQuestion.domain.equals(question.domain, ignoreCase = true)) return emptyList()
+        val questionCount = readShort(response, 4)
+        val totalRecordCount = totalRecordCount(response)
+        if (questionCount <= 0 || totalRecordCount <= 0) return emptyList()
+        var offset = 12
+        repeat(questionCount) {
+            offset = skipName(response, offset) ?: return emptyList()
+            if (offset + 4 > response.size) return emptyList()
+            offset += 4
+        }
+        val results = mutableListOf<ByteArray>()
+        repeat(totalRecordCount) {
+            offset = skipName(response, offset) ?: return@repeat
+            if (offset + 10 > response.size) return@repeat
+            val type = readShort(response, offset)
+            val dataLength = readShort(response, offset + 8)
+            offset += 10
+            if (offset + dataLength > response.size) return@repeat
+            when {
+                type == TYPE_A && dataLength == 4 -> results += response.copyOfRange(offset, offset + 4)
+                type == TYPE_AAAA && dataLength == 16 -> results += response.copyOfRange(offset, offset + 16)
+            }
+            offset += dataLength
+        }
+        return results
     }
 
     private fun extractSvcbTarget(buffer: ByteArray, offset: Int, dataLength: Int): String? {

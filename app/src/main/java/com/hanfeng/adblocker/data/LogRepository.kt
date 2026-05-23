@@ -2,6 +2,14 @@ package com.HanFeng.data
 
 import android.content.Context
 import androidx.core.content.FileProvider
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.launch
+import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.util.Locale
@@ -11,11 +19,46 @@ import java.util.zip.ZipOutputStream
 object LogRepository {
     private const val LOG_DIR = "logs"
     private const val LOG_FILE = "adblock.log"
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val logChannel = Channel<String>(capacity = Channel.UNLIMITED)
+    private var writerJob: Job? = null
+    private var currentContext: Context? = null
 
     fun append(context: Context, message: String) {
-        val file = logFile(context)
-        file.parentFile?.mkdirs()
-        file.appendText("${System.currentTimeMillis()} $message\n")
+        // Capture context once for the writer
+        if (currentContext == null) currentContext = context.applicationContext
+        logChannel.trySend("${System.currentTimeMillis()} $message\n")
+        ensureWriterRunning()
+    }
+
+    private fun ensureWriterRunning() {
+        if (writerJob?.isActive == true) return
+        synchronized(this) {
+            if (writerJob?.isActive == true) return
+            writerJob = scope.launch {
+                val ctx = currentContext ?: return@launch
+                val file = logFile(ctx)
+                file.parentFile?.mkdirs()
+                val fos = FileOutputStream(file, true)
+                val bos = BufferedOutputStream(fos, 8192)
+                try {
+                    while (isActive) {
+                        val msg = logChannel.receive()
+                        bos.write(msg.toByteArray())
+                    }
+                } catch (_: Exception) {
+                    // Silent exit on channel close or error
+                } finally {
+                    runCatching { bos.flush() }
+                    runCatching { fos.close() }
+                }
+            }
+        }
+    }
+
+    fun flushAndClose() {
+        logChannel.close()
+        writerJob?.let { scope.runCatching { it.cancel() } }
     }
 
     fun exportZip(context: Context): android.net.Uri {

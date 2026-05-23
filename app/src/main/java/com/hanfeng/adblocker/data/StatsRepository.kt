@@ -1,6 +1,8 @@
 package com.HanFeng.data
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import com.google.gson.Gson
@@ -12,6 +14,9 @@ import com.HanFeng.model.RankingType
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.ConcurrentHashMap
 
 object StatsRepository {
     private const val PREFS = "stats_repo"
@@ -20,6 +25,9 @@ object StatsRepository {
     private const val KEY_RESPONSE_TOTAL = "response_total"
     private const val KEY_TODAY_DATE = "today_date"
     private const val KEY_TODAY_BLOCKED = "today_blocked"
+    private const val KEY_DNS_BLOCKED = "dns_blocked"
+    private const val KEY_HTTP_BLOCKED = "http_blocked"
+    private const val KEY_BYTES_SAVED = "bytes_saved"
     private const val KEY_VENDOR_BLOCKED = "vendor_blocked"
     private const val KEY_VENDOR_REQUEST = "vendor_request"
     private const val KEY_VENDOR_RESPONSE = "vendor_response"
@@ -33,104 +41,244 @@ object StatsRepository {
 
     val updates: LiveData<Long> = updatesInternal
 
-    fun recordRequest(context: Context, vendor: String, appName: String) {
-        val prefs = prefs(context)
-        ensureToday(prefs)
-        prefs.edit().putInt(KEY_REQUEST_TOTAL, prefs.getInt(KEY_REQUEST_TOTAL, 0) + 1).apply()
-        incrementMap(context, KEY_VENDOR_REQUEST, vendor)
-        incrementMap(context, KEY_APP_REQUEST, appName)
-        notifyUpdated()
+    // Memory-resident counters for hot-path performance (lock-free atomics)
+    @Volatile private var todayBlocked = AtomicInteger(0)
+    @Volatile private var totalBlocked = AtomicInteger(0)
+    @Volatile private var dnsBlocked = AtomicInteger(0)
+    @Volatile private var httpBlocked = AtomicInteger(0)
+    @Volatile private var requestTotal = AtomicInteger(0)
+    @Volatile private var responseTotal = AtomicInteger(0)
+    @Volatile private var bytesSaved = AtomicLong(0)
+
+    // Memory-resident ranking maps (concurrent for lock-free access)
+    private val vendorBlockedMap = ConcurrentHashMap<String, AtomicInteger>()
+    private val vendorRequestMap = ConcurrentHashMap<String, AtomicInteger>()
+    private val vendorResponseMap = ConcurrentHashMap<String, AtomicInteger>()
+    private val appBlockedMap = ConcurrentHashMap<String, AtomicInteger>()
+    private val appRequestMap = ConcurrentHashMap<String, AtomicInteger>()
+    private val appResponseMap = ConcurrentHashMap<String, AtomicInteger>()
+
+    // Async flush handler
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var flushPending = false
+    private var initialized = false
+
+    private fun ensureInitialized(context: Context) {
+        if (initialized) {
+            ensureDayReset(context)
+            return
+        }
+        synchronized(this) {
+            if (initialized) return@synchronized
+            val prefs = prefs(context)
+            val today = dayFormatter.format(Date())
+            val savedDate = prefs.getString(KEY_TODAY_DATE, null)
+            if (savedDate != today) {
+                prefs.edit().putString(KEY_TODAY_DATE, today)
+                    .putInt(KEY_TODAY_BLOCKED, 0).apply()
+            }
+            todayBlocked.set(prefs.getInt(KEY_TODAY_BLOCKED, 0))
+            totalBlocked.set(prefs.getInt(KEY_TOTAL_BLOCKED, 0))
+            dnsBlocked.set(prefs.getInt(KEY_DNS_BLOCKED, 0))
+            httpBlocked.set(prefs.getInt(KEY_HTTP_BLOCKED, 0))
+            requestTotal.set(prefs.getInt(KEY_REQUEST_TOTAL, 0))
+            responseTotal.set(prefs.getInt(KEY_RESPONSE_TOTAL, 0))
+            bytesSaved.set(prefs.getLong(KEY_BYTES_SAVED, 0))
+
+            readMapInto(context, prefs, KEY_VENDOR_BLOCKED, vendorBlockedMap)
+            readMapInto(context, prefs, KEY_VENDOR_REQUEST, vendorRequestMap)
+            readMapInto(context, prefs, KEY_VENDOR_RESPONSE, vendorResponseMap)
+            readMapInto(context, prefs, KEY_APP_BLOCKED, appBlockedMap)
+            readMapInto(context, prefs, KEY_APP_REQUEST, appRequestMap)
+            readMapInto(context, prefs, KEY_APP_RESPONSE, appResponseMap)
+
+            initialized = true
+        }
     }
 
-    fun recordBlockedResponse(context: Context, vendor: String, appName: String) {
+    private fun ensureDayReset(context: Context) {
         val prefs = prefs(context)
-        ensureToday(prefs)
-        prefs.edit()
-            .putInt(KEY_TODAY_BLOCKED, prefs.getInt(KEY_TODAY_BLOCKED, 0) + 1)
-            .putInt(KEY_TOTAL_BLOCKED, prefs.getInt(KEY_TOTAL_BLOCKED, 0) + 1)
-            .putInt(KEY_RESPONSE_TOTAL, prefs.getInt(KEY_RESPONSE_TOTAL, 0) + 1)
-            .apply()
-        incrementMap(context, KEY_VENDOR_BLOCKED, vendor)
-        incrementMap(context, KEY_VENDOR_RESPONSE, vendor)
-        incrementMap(context, KEY_APP_BLOCKED, appName)
-        incrementMap(context, KEY_APP_RESPONSE, appName)
+        val today = dayFormatter.format(Date())
+        if (prefs.getString(KEY_TODAY_DATE, null) != today) {
+            prefs.edit().putString(KEY_TODAY_DATE, today).putInt(KEY_TODAY_BLOCKED, 0).apply()
+            // Reset in-memory day counter
+            if (todayBlocked.get() > 0) {
+                todayBlocked.set(0)
+                scheduleFlush(context)
+            }
+        }
+    }
+
+    fun recordRequest(context: Context, vendor: String, appName: String) {
+        ensureInitialized(context)
+        requestTotal.incrementAndGet()
+        incrementMapInMemory(vendorRequestMap, vendor)
+        incrementMapInMemory(appRequestMap, appName)
         notifyUpdated()
+        scheduleFlush(context)
+    }
+
+    fun recordBlockedResponse(context: Context, vendor: String, appName: String, bytesSaved: Long = 0) {
+        ensureInitialized(context)
+        todayBlocked.incrementAndGet()
+        totalBlocked.incrementAndGet()
+        responseTotal.incrementAndGet()
+        this.bytesSaved.addAndGet(bytesSaved)
+        incrementMapInMemory(vendorBlockedMap, vendor)
+        incrementMapInMemory(vendorResponseMap, vendor)
+        incrementMapInMemory(appBlockedMap, appName)
+        incrementMapInMemory(appResponseMap, appName)
+        notifyUpdated()
+        scheduleFlush(context)
+    }
+
+    fun recordBlockedDns(context: Context, vendor: String, appName: String, bytesSaved: Long = 0) {
+        ensureInitialized(context)
+        todayBlocked.incrementAndGet()
+        totalBlocked.incrementAndGet()
+        dnsBlocked.incrementAndGet()
+        responseTotal.incrementAndGet()
+        this.bytesSaved.addAndGet(bytesSaved)
+        incrementMapInMemory(vendorBlockedMap, vendor)
+        incrementMapInMemory(vendorResponseMap, vendor)
+        incrementMapInMemory(appBlockedMap, appName)
+        incrementMapInMemory(appResponseMap, appName)
+        notifyUpdated()
+        scheduleFlush(context)
+    }
+
+    fun recordBlockedHttp(context: Context, vendor: String, appName: String, bytesSaved: Long = 0) {
+        ensureInitialized(context)
+        todayBlocked.incrementAndGet()
+        totalBlocked.incrementAndGet()
+        httpBlocked.incrementAndGet()
+        responseTotal.incrementAndGet()
+        this.bytesSaved.addAndGet(bytesSaved)
+        incrementMapInMemory(vendorBlockedMap, vendor)
+        incrementMapInMemory(vendorResponseMap, vendor)
+        incrementMapInMemory(appBlockedMap, appName)
+        incrementMapInMemory(appResponseMap, appName)
+        notifyUpdated()
+        scheduleFlush(context)
+    }
+
+    private fun scheduleFlush(context: Context) {
+        if (flushPending) return
+        flushPending = true
+        mainHandler.postDelayed({
+            flushPending = false
+            persistAll(context)
+        }, 5000L)
+    }
+
+    private fun persistAll(context: Context) {
+        val prefs = prefs(context)
+        val editor = prefs.edit()
+            .putInt(KEY_TODAY_BLOCKED, todayBlocked.get())
+            .putInt(KEY_TOTAL_BLOCKED, totalBlocked.get())
+            .putInt(KEY_DNS_BLOCKED, dnsBlocked.get())
+            .putInt(KEY_HTTP_BLOCKED, httpBlocked.get())
+            .putInt(KEY_REQUEST_TOTAL, requestTotal.get())
+            .putInt(KEY_RESPONSE_TOTAL, responseTotal.get())
+            .putLong(KEY_BYTES_SAVED, bytesSaved.get())
+
+            editor.putString(KEY_VENDOR_BLOCKED, gson.toJson(trimMap(vendorBlockedMap)))
+            editor.putString(KEY_VENDOR_REQUEST, gson.toJson(trimMap(vendorRequestMap)))
+            editor.putString(KEY_VENDOR_RESPONSE, gson.toJson(trimMap(vendorResponseMap)))
+            editor.putString(KEY_APP_BLOCKED, gson.toJson(trimMap(appBlockedMap)))
+            editor.putString(KEY_APP_REQUEST, gson.toJson(trimMap(appRequestMap)))
+            editor.putString(KEY_APP_RESPONSE, gson.toJson(trimMap(appResponseMap)))
+
+        editor.apply()
+    }
+
+    fun flushNow(context: Context) {
+        persistAll(context)
     }
 
     fun getDashboard(context: Context): DashboardStats {
-        val prefs = prefs(context)
-        ensureToday(prefs)
+        ensureInitialized(context)
         return DashboardStats(
-            todayBlocked = prefs.getInt(KEY_TODAY_BLOCKED, 0),
-            totalBlocked = prefs.getInt(KEY_TOTAL_BLOCKED, 0),
-            requestTotal = prefs.getInt(KEY_REQUEST_TOTAL, 0),
-            responseTotal = prefs.getInt(KEY_RESPONSE_TOTAL, 0)
+            todayBlocked = todayBlocked.get(),
+            totalBlocked = totalBlocked.get(),
+            dnsBlocked = dnsBlocked.get(),
+            httpBlocked = httpBlocked.get(),
+            requestTotal = requestTotal.get(),
+            responseTotal = responseTotal.get(),
+            bytesSaved = bytesSaved.get()
         )
     }
 
     fun getRankings(context: Context): RankingBundle {
+        ensureInitialized(context)
         return RankingBundle(
-            vendorBlocked = ranking(context, KEY_VENDOR_BLOCKED),
-            vendorRequest = ranking(context, KEY_VENDOR_REQUEST),
-            vendorResponse = ranking(context, KEY_VENDOR_RESPONSE),
-            appBlocked = ranking(context, KEY_APP_BLOCKED),
-            appRequest = ranking(context, KEY_APP_REQUEST),
-            appResponse = ranking(context, KEY_APP_RESPONSE)
+            vendorBlocked = rankingFromMap(vendorBlockedMap),
+            vendorRequest = rankingFromMap(vendorRequestMap),
+            vendorResponse = rankingFromMap(vendorResponseMap),
+            appBlocked = rankingFromMap(appBlockedMap),
+            appRequest = rankingFromMap(appRequestMap),
+            appResponse = rankingFromMap(appResponseMap)
         )
     }
 
     fun getRanking(context: Context, type: RankingType): List<RankingEntry> {
-        val key = when (type) {
-            RankingType.VENDOR_BLOCKED -> KEY_VENDOR_BLOCKED
-            RankingType.VENDOR_REQUEST -> KEY_VENDOR_REQUEST
-            RankingType.VENDOR_RESPONSE -> KEY_VENDOR_RESPONSE
-            RankingType.APP_BLOCKED -> KEY_APP_BLOCKED
-            RankingType.APP_REQUEST -> KEY_APP_REQUEST
-            RankingType.APP_RESPONSE -> KEY_APP_RESPONSE
+        ensureInitialized(context)
+        val map = when (type) {
+            RankingType.VENDOR_BLOCKED -> vendorBlockedMap
+            RankingType.VENDOR_REQUEST -> vendorRequestMap
+            RankingType.VENDOR_RESPONSE -> vendorResponseMap
+            RankingType.APP_BLOCKED -> appBlockedMap
+            RankingType.APP_REQUEST -> appRequestMap
+            RankingType.APP_RESPONSE -> appResponseMap
         }
-        return ranking(context, key)
+        return rankingFromMap(map)
     }
 
-    private fun ranking(context: Context, key: String): List<RankingEntry> {
-        return readMap(context, key)
-            .entries
-            .sortedWith(
-                compareBy<Map.Entry<String, Int>> { isFallbackName(it.key) }
-                    .thenByDescending { it.value }
-                    .thenBy { it.key }
-            )
-            .map { RankingEntry(it.key, it.value) }
-    }
-
-    private fun incrementMap(context: Context, key: String, name: String) {
-        val map = readMap(context, key).toMutableMap()
+    private fun incrementMapInMemory(map: ConcurrentHashMap<String, AtomicInteger>, name: String) {
         val finalName = name.ifBlank { "未知来源" }
-        map[finalName] = (map[finalName] ?: 0) + 1
-        val trimmed = map.entries
+        map.computeIfAbsent(finalName) { AtomicInteger(0) }.incrementAndGet()
+    }
+
+    private fun trimMap(map: ConcurrentHashMap<String, AtomicInteger>): Map<String, Int> {
+        val sorted = map.entries.asSequence()
             .sortedWith(
-                compareBy<Map.Entry<String, Int>> { isFallbackName(it.key) }
-                    .thenByDescending { it.value }
+                compareBy<Map.Entry<String, AtomicInteger>> { isFallbackName(it.key) }
+                    .thenByDescending { it.value.get() }
                     .thenBy { it.key }
             )
             .take(MAX_RANKING_ENTRIES)
-            .associate { it.key to it.value }
-        prefs(context).edit().putString(key, gson.toJson(trimmed)).apply()
+            .map { it.key to it.value.get() }
+            .toList()
+        return sorted.toMap()
     }
 
-    private fun readMap(context: Context, key: String): Map<String, Int> {
-        val type = object : TypeToken<Map<String, Int>>() {}.type
-        return gson.fromJson(prefs(context).getString(key, "{}"), type) ?: emptyMap()
+    private fun rankingFromMap(map: ConcurrentHashMap<String, AtomicInteger>): List<RankingEntry> {
+        return map.entries.asSequence()
+            .sortedWith(
+                compareBy<Map.Entry<String, AtomicInteger>> { isFallbackName(it.key) }
+                    .thenByDescending { it.value.get() }
+                    .thenBy { it.key }
+            )
+            .map { RankingEntry(it.key, it.value.get()) }
+            .toList()
+    }
+
+    private fun readMapInto(context: Context, prefs: android.content.SharedPreferences, key: String, target: ConcurrentHashMap<String, AtomicInteger>) {
+        val json = prefs.getString(key, null) ?: return
+        try {
+            val type = object : TypeToken<Map<String, Int>>() {}.type
+            val parsed = gson.fromJson(json, type) as? Map<String, Int>
+            if (parsed != null) {
+                target.clear()
+                parsed.forEach { (k, v) -> target[k] = AtomicInteger(v) }
+            }
+        } catch (_: Exception) {
+            // Ignore parse errors on startup
+        }
     }
 
     private fun isFallbackName(name: String): Boolean {
         return name.startsWith("其它") || name.contains("未知") || name == "未识别厂商"
-    }
-
-    private fun ensureToday(prefs: android.content.SharedPreferences) {
-        val today = dayFormatter.format(Date())
-        if (prefs.getString(KEY_TODAY_DATE, null) != today) {
-            prefs.edit().putString(KEY_TODAY_DATE, today).putInt(KEY_TODAY_BLOCKED, 0).apply()
-        }
     }
 
     private fun prefs(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)

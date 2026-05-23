@@ -7,7 +7,18 @@ data class BlockRule(
     val domain: String,
     val vendor: String,
     val source: RuleSource,
-    val dnsTypes: Set<Int>? = null
+    val dnsTypes: Set<Int>? = null,
+    val excludedDnsTypes: Set<Int>? = null,
+    val thirdParty: Boolean = false,
+    val redirect: Boolean = false,
+    val denyallow: Set<String> = emptySet(),
+    val urlblock: Boolean = false,
+    val appPackages: Set<String> = emptySet(),
+    val keywordPattern: String? = null,
+    val regexPattern: String? = null,
+    val cosmeticSelector: String? = null,
+    val removeParams: Set<String> = emptySet(),
+    val cspValue: String? = null
 )
 
 enum class RuleSource(val label: String) {
@@ -20,8 +31,11 @@ enum class RuleSource(val label: String) {
 data class DashboardStats(
     val todayBlocked: Int,
     val totalBlocked: Int,
+    val dnsBlocked: Int,
+    val httpBlocked: Int,
     val requestTotal: Int,
-    val responseTotal: Int
+    val responseTotal: Int,
+    val bytesSaved: Long
 )
 
 data class RankingEntry(
@@ -55,8 +69,35 @@ data class InstalledApp(
 )
 
 data class DnsQuestion(
+    val id: Int,
     val domain: String,
-    val qType: Int
+    val qType: Int,
+    val timestamp: Long
+)
+
+data class DnsAnswer(
+    val name: String,
+    val type: Int,
+    val ttl: Int,
+    val data: String
+)
+
+data class DnsResponse(
+    val id: Int,
+    val questions: List<DnsQuestion>,
+    val answers: List<DnsAnswer>,
+    val isBlocked: Boolean = false,
+    val blockRule: BlockRule? = null
+)
+
+data class LogEntry(
+    val id: Long = 0,
+    val timestamp: Long,
+    val domain: String,
+    val vendor: String,
+    val appName: String,
+    val isBlocked: Boolean,
+    val reason: String = ""
 )
 
 data class PacketInfo(
@@ -66,10 +107,62 @@ data class PacketInfo(
     val protocol: Int,
     val sourcePort: Int,
     val destinationPort: Int,
-    val payload: ByteArray
-)
+    val payload: ByteArray,
+    val tcpSequenceNumber: Long? = null,
+    val tcpAcknowledgementNumber: Long? = null,
+    val tcpFlags: Int = 0,
+    val tcpWindowSize: Int? = null,
+    val appName: String? = null
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is PacketInfo) return false
+        return version == other.version &&
+            sourceAddress.contentEquals(other.sourceAddress) &&
+            destinationAddress.contentEquals(other.destinationAddress) &&
+            protocol == other.protocol &&
+            sourcePort == other.sourcePort &&
+            destinationPort == other.destinationPort &&
+            payload.contentEquals(other.payload) &&
+            tcpSequenceNumber == other.tcpSequenceNumber &&
+            tcpAcknowledgementNumber == other.tcpAcknowledgementNumber &&
+            tcpFlags == other.tcpFlags &&
+            tcpWindowSize == other.tcpWindowSize &&
+            appName == other.appName
+    }
+
+    override fun hashCode(): Int {
+        var result = version
+        result = 31 * result + sourceAddress.contentHashCode()
+        result = 31 * result + destinationAddress.contentHashCode()
+        result = 31 * result + protocol
+        result = 31 * result + sourcePort
+        result = 31 * result + destinationPort
+        result = 31 * result + payload.contentHashCode()
+        result = 31 * result + (tcpSequenceNumber?.hashCode() ?: 0)
+        result = 31 * result + (tcpAcknowledgementNumber?.hashCode() ?: 0)
+        result = 31 * result + tcpFlags
+        result = 31 * result + (tcpWindowSize?.hashCode() ?: 0)
+        result = 31 * result + (appName?.hashCode() ?: 0)
+        return result
+    }
+}
 
 sealed interface RuleListItem {
-    data class Group(val vendor: String, val count: Int, val expanded: Boolean) : RuleListItem
-    data class Domain(val rule: BlockRule, val selected: Boolean, val selectionMode: Boolean) : RuleListItem
+    data class Group(
+        val vendor: String,
+        val count: Int,
+        val expanded: Boolean
+    ) : RuleListItem
+
+    data class Domain(
+        val rule: BlockRule,
+        val selected: Boolean,
+        val selectionMode: Boolean
+    ) : RuleListItem
+
+    data class More(
+        val vendor: String,
+        val remainingCount: Int
+    ) : RuleListItem
 }

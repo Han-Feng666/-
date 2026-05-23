@@ -49,14 +49,38 @@
         android:background="@drawable/bg_panel"
         android:fillViewport="true">
 
-        <TextView
-            android:id="@+id/contentText"
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:padding="16dp"
-            android:lineSpacingExtra="1dp"
-            android:text="1. 点击“开启拦截”后，应用会建立本地 VPN，首次使用需授权 VPN 权限。&#10;2. 应用只拦截命中广告规则的 DNS 域名请求，对未命中的请求会正常转发，尽量保证不影响手机上网。&#10;3. 对于 TCP、非 DNS 的 UDP 以及其他正常网络流量，应用默认不修改内容，确保网络连接保持通畅。&#10;4. 左侧界面可导入、添加、分类查看和批量删除规则；右侧界面可查看拦截统计和排行榜。&#10;5. 导入规则文件后，应用会自动在后台分析可导入规则、例外规则、重复项和被跳过的高级修饰符。&#10;6. 规则导入兼容常见 Hosts 与 AdGuard 域名型规则；对依赖请求上下文的高级修饰符会自动跳过，优先保证网络正常。&#10;7. 黑白名单：默认对受管应用生效，可将指定应用加入白名单后完全放行，不参与拦截。&#10;8. 防绕过机制：内置常见加密 DNS 阻止策略，减少广告通过加密 DNS 绕过拦截的情况。&#10;9. 低功耗设计：仅在您主动开启时运行，关闭后立即停止拦截，不常驻后台。&#10;10. 如果某些应用仍显示旧广告，通常是本地缓存导致，建议清理对应应用缓存后再测试。&#10;11. 内置保守广告规则，App 首次启动会自动导入一批保守广告规则，主要覆盖常见广告 SDK / 广告投放域名，优先拦截小说类常见广告而不碰正常主站域名。&#10;12. 厂商识别与应用识别，内置较多国内外广告平台厂商识别。&#10;13. 应用如有BUG或有更好的建议请进群反馈。"
-            android:textColor="@color/hf_text_primary"
-            android:textSize="15sp" />
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                android:id="@+id/contentText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:lineSpacingExtra="1dp"
+                android:text="使用说明加载中..."
+                android:textColor="@color/hf_text_primary"
+                android:textSize="15sp" />
+
+            <TextView
+                android:id="@+id/contentSubText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:lineSpacingExtra="1dp"
+                android:textColor="@color/hf_text_secondary"
+                android:textSize="14sp"
+                android:visibility="gone" />
+
+            <LinearLayout
+                android:id="@+id/sectionsContainer"
+                android:layout_width="match_parent"
+                android:layout_marginTop="12dp"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:visibility="gone" />
+        </LinearLayout>
     </ScrollView>
 </LinearLayout>

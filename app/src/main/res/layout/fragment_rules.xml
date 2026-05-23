@@ -30,7 +30,7 @@
             android:id="@+id/ruleSummary"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
+            android:layout_marginTop="6dp"
             android:text="已导入 0 条规则"
             android:textColor="@color/hf_text_secondary"
             android:textSize="14sp" />
@@ -48,7 +48,8 @@
                 android:layout_weight="1"
                 android:background="@drawable/bg_panel"
                 android:gravity="center_vertical"
-                android:hint="输入域名，如 example.com"
+                android:hint="输入域名或粘贴规则内容"
+                android:imeOptions="actionDone"
                 android:inputType="textUri"
                 android:padding="10dp"
                 android:textColor="@color/hf_text_primary"
@@ -64,9 +65,9 @@
                 android:layout_height="48dp"
                 android:background="@drawable/bg_panel"
                 android:backgroundTint="@null"
-                android:minWidth="68dp"
+                android:minWidth="84dp"
                 android:paddingHorizontal="16dp"
-                android:text="添加"
+                android:text="添加规则"
                 android:textAllCaps="false"
                 android:textColor="@color/hf_text_primary"
                 android:textSize="16sp" />
@@ -84,7 +85,7 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="支持一行一个域名，也支持空格、逗号或整段规则内容直接粘贴"
+                android:text="支持域名、Hosts 和 AdGuard 域名型规则，整段内容可直接粘贴"
                 android:textColor="@color/hf_text_secondary"
                 android:textSize="12sp" />
 
@@ -124,48 +125,13 @@
             android:orientation="horizontal">
 
             <Button
-                android:id="@+id/btnImportRule"
+                android:id="@+id/btnRuleActions"
                 android:layout_width="0dp"
                 android:layout_height="48dp"
                 android:layout_weight="1"
                 android:background="@drawable/bg_panel"
                 android:backgroundTint="@null"
-                android:text="导入并分析"
-                android:textAllCaps="false"
-                android:textColor="@color/hf_text_primary"
-                android:textSize="16sp" />
-
-            <Space
-                android:layout_width="8dp"
-                android:layout_height="1dp" />
-
-            <Button
-                android:id="@+id/btnDownloadRules"
-                android:layout_width="0dp"
-                android:layout_height="48dp"
-                android:layout_weight="1"
-                android:background="@drawable/bg_panel"
-                android:backgroundTint="@null"
-                android:text="同步规则"
-                android:textAllCaps="false"
-                android:textColor="@color/hf_text_primary"
-                android:textSize="16sp" />
-        </LinearLayout>
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:orientation="horizontal">
-
-            <Button
-                android:id="@+id/btnExportLogs"
-                android:layout_width="0dp"
-                android:layout_height="48dp"
-                android:layout_weight="1"
-                android:background="@drawable/bg_panel"
-                android:backgroundTint="@null"
-                android:text="导出日志"
+                android:text="导入/同步规则"
                 android:textAllCaps="false"
                 android:textColor="@color/hf_text_primary"
                 android:textSize="16sp" />
@@ -199,7 +165,42 @@
                 android:layout_height="48dp"
                 android:background="@drawable/bg_panel"
                 android:backgroundTint="@null"
-                android:text="筛选非广告规则"
+                android:text="清理重复与无效规则"
+                android:textAllCaps="false"
+                android:textColor="@color/hf_text_primary"
+                android:textSize="16sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/btnTrafficCard"
+                android:layout_width="0dp"
+                android:layout_height="48dp"
+                android:layout_weight="1"
+                android:background="@drawable/bg_panel"
+                android:backgroundTint="@null"
+                android:text="免费领流量卡"
+                android:textAllCaps="false"
+                android:textColor="@color/hf_text_primary"
+                android:textSize="16sp" />
+
+            <Space
+                android:layout_width="8dp"
+                android:layout_height="1dp" />
+
+            <Button
+                android:id="@+id/btnJoinGroup"
+                android:layout_width="0dp"
+                android:layout_height="48dp"
+                android:layout_weight="1"
+                android:background="@drawable/bg_panel"
+                android:backgroundTint="@null"
+                android:text="加入群聊"
                 android:textAllCaps="false"
                 android:textColor="@color/hf_text_primary"
                 android:textSize="16sp" />
@@ -210,9 +211,11 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
+            android:background="@drawable/bg_panel"
             android:gravity="center_vertical"
             android:orientation="horizontal"
-            android:padding="0dp"
+            android:paddingHorizontal="12dp"
+            android:paddingVertical="10dp"
             android:visibility="gone">
 
             <TextView

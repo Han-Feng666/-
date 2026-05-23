@@ -109,7 +109,7 @@ collect_args() {
 
 save() {
     for i do
-        printf '%s\n' "$i" | sed "s/'/'\\''/g;1s/^/'/;4s/4/' \\/"
+        printf '%s\n' "$i" | sed "s/'/'\\''/g; 1s/^/'/; \$s/\$/' \\\\/"
     done
     echo " "
 }
@@ -122,4 +122,4 @@ eval "set -- \
         org.gradle.wrapper.GradleWrapperMain \
         $APP_ARGS"
 
-exec "$JAVACMD" $DEFAULT_JVM_OPTS $JAVA_OPTS $GRADLE_OPTS "$@"
+exec "$JAVACMD" -Xmx64m -Xms64m $JAVA_OPTS $GRADLE_OPTS "$@"

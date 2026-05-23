@@ -37,7 +37,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="12dp"
                 android:columnCount="2"
-                android:rowCount="2" />
+                android:rowCount="3" />
 
             <TextView
                 android:layout_width="wrap_content"
@@ -74,42 +74,6 @@
                     android:orientation="vertical" />
             </LinearLayout>
 
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:orientation="horizontal">
-
-                <Button
-                    android:id="@+id/btnTrafficCard"
-                    android:layout_width="0dp"
-                    android:layout_height="46dp"
-                    android:layout_weight="1"
-                    android:background="@drawable/bg_panel"
-                    android:backgroundTint="@null"
-                    android:paddingHorizontal="12dp"
-                    android:text="免费领流量卡"
-                    android:textAllCaps="false"
-                    android:textColor="@color/hf_text_primary"
-                    android:textSize="14sp" />
-
-                <Space
-                    android:layout_width="8dp"
-                    android:layout_height="1dp" />
-
-                <Button
-                    android:id="@+id/btnJoinGroup"
-                    android:layout_width="0dp"
-                    android:layout_height="46dp"
-                    android:layout_weight="1"
-                    android:background="@drawable/bg_panel"
-                    android:backgroundTint="@null"
-                    android:paddingHorizontal="12dp"
-                    android:text="加入群聊"
-                    android:textAllCaps="false"
-                    android:textColor="@color/hf_text_primary"
-                    android:textSize="14sp" />
-            </LinearLayout>
         </LinearLayout>
     </ScrollView>
 </FrameLayout>
